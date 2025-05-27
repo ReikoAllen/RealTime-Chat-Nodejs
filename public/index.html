@@ -1,0 +1,275 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>Real-Time Chat</title>
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+
+  <!-- Sidebar with user list -->
+  <div id="sidebar">
+    <h2>Chat Room</h2>
+    <ul id="user-list"></ul>
+  </div>
+
+  <!-- Chat container -->
+  <div id="chat-container">
+    <ul id="messages"></ul>
+
+    <!-- Input message area -->
+    <div id="input-container">
+      <input id="input-message" type="text" placeholder="Type a message..." />
+      <button id="send-btn">Send</button>
+    </div>
+  </div>
+
+  <!-- Modal for login -->
+  <div id="login-modal" class="modal">
+    <div class="modal-content">
+      <h2>Login</h2>
+      <input type="text" id="username-input" placeholder="Username" />
+      <input type="password" id="password-input" placeholder="Password" />
+      <button id="login-btn">Login / Register</button>
+    </div>
+  </div>
+
+  <script src="/socket.io/socket.io.js"></script>
+  <script>
+    const socket = io();
+
+    let currentUsername = null; // Track logged-in user
+    let lastMessageDate = null;
+
+    const inputMessage = document.getElementById('input-message');
+    const sendButton = document.getElementById('send-btn');
+    const messagesList = document.getElementById('messages');
+    const userList = document.getElementById('user-list');
+
+    const loginModal = document.getElementById('login-modal');
+    const loginButton = document.getElementById('login-btn');
+    const usernameInput = document.getElementById('username-input');
+    const passwordInput = document.getElementById('password-input');
+
+    // Show login modal at start
+    loginModal.classList.add('active');
+
+    // Handle login
+    loginButton.addEventListener('click', () => {
+      const username = usernameInput.value.trim();
+      const password = passwordInput.value.trim();
+      if (username && password) {
+        socket.emit('login', { username, password });
+      } else {
+        alert('Both fields are required.');
+      }
+    });
+
+    // Handle login success
+    socket.on('login success', (message) => {
+      alert(message);
+      loginModal.classList.remove('active');
+      currentUsername = usernameInput.value.trim(); // Save logged-in username
+    });
+
+    // Handle login error
+    socket.on('login error', (message) => {
+      alert(message);
+    });
+
+    // Chat history
+    socket.on('chat history', (history) => {
+      history.forEach((msg) => addMessage(msg));
+    });
+
+    // New chat message
+    socket.on('chat message', (msg) => {
+      addMessage(msg);
+    });
+
+    // User joined message
+    socket.on('user joined', (data) => {
+      addJoinMessage(data);
+    });
+
+    function addJoinMessage(data) {
+      const li = document.createElement('li');
+      li.classList.add('message-row');
+
+      // Time element
+      const timeSpan = document.createElement('span');
+      timeSpan.className = 'message-time';
+      timeSpan.textContent = data.time;
+
+      // Message bubble
+      const messageContent = document.createElement('div');
+      messageContent.classList.add('message');
+      messageContent.innerHTML = `<strong>${data.user}:</strong> joined the chat`;
+
+      li.appendChild(messageContent);
+      li.appendChild(timeSpan);
+      messagesList.appendChild(li);
+      messagesList.scrollTop = messagesList.scrollHeight;
+    }
+
+    // Update user list with admin controls
+    socket.on('user list', (users) => {
+      userList.innerHTML = '';
+
+      // Move currentUsername to the end of the list
+      const usersCopy = users.slice();
+      const myIndex = usersCopy.indexOf(currentUsername);
+      if (myIndex !== -1) {
+        usersCopy.splice(myIndex, 1); // Remove your username
+        usersCopy.push(currentUsername); // Add it to the end
+      }
+
+      usersCopy.forEach(user => {
+        const li = document.createElement('li');
+        li.textContent = user;
+
+        // If admin or hiddenadmin and not self, show Kick/Ban buttons
+        if (
+          (currentUsername === 'admin' || currentUsername === 'hiddenadmin') &&
+          user !== currentUsername
+        ) {
+          const btnContainer = document.createElement('span');
+          btnContainer.className = 'user-action-btn-group';
+
+          const kickBtn = document.createElement('button');
+          kickBtn.textContent = 'Kick';
+          kickBtn.className = 'user-action-btn kick-btn';
+          kickBtn.onclick = () => {
+            if (confirm(`Kick ${user}?`)) socket.emit('kick user', user);
+          };
+
+          const banBtn = document.createElement('button');
+          banBtn.textContent = 'Ban';
+          banBtn.className = 'user-action-btn ban-btn';
+          banBtn.onclick = () => {
+            if (confirm(`Ban ${user}?`)) socket.emit('ban user', user);
+          };
+
+          btnContainer.appendChild(kickBtn);
+          btnContainer.appendChild(banBtn);
+          li.textContent = user;
+          li.appendChild(btnContainer);
+        }
+
+        userList.appendChild(li);
+      });
+    });
+
+    // Show alert if kicked or banned
+    socket.on('kicked', (msg) => {
+      alert(msg);
+      window.location.reload();
+    });
+    socket.on('banned', (msg) => {
+      alert(msg);
+      window.location.reload();
+    });
+
+    // Send message
+    sendButton.addEventListener('click', () => {
+      const message = inputMessage.value.trim();
+      if (message) {
+        socket.emit('chat message', message);
+        inputMessage.value = '';
+      }
+    });
+
+    // Send on Enter key
+    inputMessage.addEventListener('keypress', (e) => {
+      if (e.key === 'Enter') {
+        sendButton.click();
+      }
+    });
+
+    // Focus message box when "/" is pressed (PC only)
+    document.addEventListener('keydown', (e) => {
+      // Ignore if input or textarea is already focused
+      const active = document.activeElement;
+      const isInput = active && (active.tagName === 'INPUT' || active.tagName === 'TEXTAREA');
+      // Only on PC (not mobile)
+      const isDesktop = window.innerWidth > 768;
+      if (
+        isDesktop &&
+        e.key === '/' &&
+        !isInput
+      ) {
+        e.preventDefault();
+        inputMessage.focus();
+      }
+    });
+
+    function linkify(text) {
+      // Regex to match URLs (http, https, www)
+      return text.replace(
+        /((https?:\/\/|www\.)[^\s<]+)/gi,
+        function(url) {
+          let href = url;
+          if (!href.match(/^https?:\/\//)) {
+            href = 'http://' + href;
+          }
+          return `<a href="${href}" target="_blank" rel="noopener noreferrer">${url}</a>`;
+        }
+      );
+    }
+
+    // Helper to add message to chat
+    function addMessage(msg) {
+      // Determine the date of this message
+      let msgDate;
+      if (typeof msg === 'object' && msg.time) {
+        msgDate = msg.date || new Date().toLocaleDateString();
+      } else {
+        msgDate = new Date().toLocaleDateString();
+      }
+
+      // Insert date separator if the date has changed
+      if (msgDate !== lastMessageDate) {
+        const dateLi = document.createElement('li');
+        dateLi.className = 'date-separator';
+        dateLi.textContent = msgDate;
+        messagesList.appendChild(dateLi);
+        lastMessageDate = msgDate;
+      }
+
+      const li = document.createElement('li');
+      li.classList.add('message-row');
+
+      // Time element
+      const timeSpan = document.createElement('span');
+      timeSpan.className = 'message-time';
+      if (typeof msg === 'object' && msg.time) {
+        timeSpan.textContent = msg.time;
+      }
+
+      // Message bubble
+      const messageContent = document.createElement('div');
+      messageContent.classList.add('message');
+
+      if (typeof msg === 'string') {
+        messageContent.textContent = msg;
+      } else {
+        // Show "Anonymous" in red if user is hiddenadmin
+        let displayUser = msg.user;
+        if (msg.user === 'hiddenadmin') {
+          displayUser = `<span class="anonymous-red">Anonymous</span>`;
+        } else {
+          displayUser = `<strong>${msg.user}</strong>`;
+        }
+        // Use linkify for msg.text
+        messageContent.innerHTML = `${displayUser}: ${linkify(msg.text)}`;
+      }
+
+      li.appendChild(messageContent);
+      li.appendChild(timeSpan);
+      messagesList.appendChild(li);
+      messagesList.scrollTop = messagesList.scrollHeight;
+    }
+  </script>
+</body>
+</html>
